@@ -39,14 +39,11 @@ module Cache
     );
 
 // FSM
-typedef enum logic[3 : 0] {IDLE, READ1, READ2, READ3, HIT, LRU_UPDATE, MISS1, MISS2, MISS3} fsm_state;
+typedef enum logic[3 : 0] {IDLE, READ, HIT, LRU_UPDATE, MISS1, MISS2, MISS3} fsm_state;
 fsm_state next_state, current_state;
-    
+
+
 // Registers for inputs from the processor
-logic [opcode_width - 1 : 0] opcode_reg, opcode_next;
-logic [func3_width - 1 : 0] func3_reg, func3_next; 
-logic [total_width - 1 : 0] address_reg, address_next;
-logic [total_width - 1 : 0] store_data_reg, store_data_next;
 logic [total_width - 1 : 0] axi_data_reg, axi_data_next;
 
 // Memories for tags and data
@@ -61,7 +58,7 @@ logic [N * total_width - 1 : 0] rdata_data, wdata_data;
 logic [total_width - 1 : 0] wdata_data_reg, wdata_data_next;
 logic [tag_width + 1 : 0] wdata_tag_reg, wdata_tag_next;
 logic [total_width - 1 : 0] data_comb_reg, data_comb_next;
-logic hit_reg, hit_next, valid_bit_reg, valid_bit_next, dirty_bit_reg, dirty_bit_next;
+logic valid_bit_reg, valid_bit_next, dirty_bit_reg, dirty_bit_next;
 logic [total_width - 1 : 0] load_data_reg, load_data_next;
 logic [N * total_width - 1 : 0] backup_data_reg, backup_data_next;
 logic [N * (tag_width + 2) - 1 : 0] backup_tag_reg, backup_tag_next;
@@ -95,7 +92,7 @@ logic [$clog2(N) - 1 : 0] lru_set;
 // ------------------------------------------------------- //
 
 // Assigments
-assign axi_address_o = address_reg;
+assign axi_address_o = address_i;
 assign data_o = load_data_reg;
 assign axi_data_next = axi_data_i;
 
@@ -115,22 +112,17 @@ LRU
     .lru_set_o(lru_set)
 );
 
-assign lru_address = address_reg[index_width + offset_width - 1 : offset_width];
+assign lru_address = address_i[index_width + offset_width - 1 : offset_width];
 
 // ------------------------------------------------------- //
 // Registers
 
 always_ff@(posedge clk_i) begin
     if(rst_i) begin
-       opcode_reg <= 0;
-       func3_reg <= 0;
-       address_reg <= 0;
-       store_data_reg <= 0;
        axi_data_reg <= 0;
        wdata_tag_reg <= 0;
        wdata_data_reg <= 0;
        data_comb_reg <= 0;
-       hit_reg <= 0;
        valid_bit_reg <= 0;
        dirty_bit_reg <= 0;
        load_data_reg <= 0;
@@ -139,15 +131,10 @@ always_ff@(posedge clk_i) begin
        encoder_reg <= 0;
     end
     else begin
-       opcode_reg <= opcode_next;
-       func3_reg <= func3_next;
-       address_reg <= address_next;
-       store_data_reg <= store_data_next;
        axi_data_reg <= axi_data_next;
        wdata_tag_reg <= wdata_tag_next;
        wdata_data_reg <= wdata_data_next;
        data_comb_reg <= data_comb_next;
-       hit_reg <= hit_next;
        valid_bit_reg <= valid_bit_next;
        dirty_bit_reg <= dirty_bit_next;
        load_data_reg <= load_data_next;
@@ -171,8 +158,8 @@ always_ff@(posedge clk_i) begin
         memory_data[addr_data] <= wdata_data;
 end
 
-assign addr_tag = address_reg[index_width + offset_width - 1 : offset_width];
-assign addr_data = address_reg[index_width + offset_width - 1 : offset_width];
+assign addr_tag = address_i[index_width + offset_width - 1 : offset_width];
+assign addr_data = address_i[index_width + offset_width - 1 : offset_width];
 assign wdata_data = wdata_data_reg;
 assign wdata_tag = wdata_tag_reg;
 
@@ -186,7 +173,7 @@ generate
     for(i = 0; i < N; i++) begin
         always_comb begin
                 tag[i] = rdata_tag[(i + 1) * (tag_width + 2) - 1 : i * (tag_width + 2)]; 
-                comp[i] = logic'(tag[i][tag_width - 1 : 0] == address_reg[(total_width - 1) -: tag_width]);
+                comp[i] = logic'(tag[i][tag_width - 1 : 0] == address_i[(total_width - 1) -: tag_width]);
                 hit_vector[i] = tag[i][tag_width] & comp[i];
                 data_mux[i] = rdata_data[(i + 1) * (total_width) - 1 -: total_width];
                 dirty_bit_vector[i] = tag[i][tag_width + 1];
@@ -237,15 +224,15 @@ always_comb begin
     load_data_comb = sel ? axi_data_reg : data_comb_reg;
     
     // STORE
-    case(func3_reg)
+    case(func3_i)
         STORE_WORD: begin
-            store_temp = store_data_reg;
+            store_temp = data_i;
         end
         STORE_HALF_WORD: begin
-            store_temp = {load_data_comb[total_width - 1 : 16], store_data_reg[15 : 0]};
+            store_temp = {load_data_comb[total_width - 1 : 16], data_i[15 : 0]};
         end
         default: begin
-            store_temp = {load_data_comb[total_width - 1 : 8], store_data_reg[7 : 0]};
+            store_temp = {load_data_comb[total_width - 1 : 8], data_i[7 : 0]};
         end
     endcase
     
@@ -253,12 +240,12 @@ always_comb begin
     store_encoder = sel ? lru_set : encoder_reg;
     
     // Dirty bit
-    tag_temp[tag_width + 1] =  sel ? ((opcode_reg == STORE_opcode) ? 1 : 0) : 
-                                     ((opcode_reg == STORE_opcode) ? 1 : dirty_bit_reg);
+    tag_temp[tag_width + 1] =  sel ? ((opcode_i == STORE_opcode) ? 1 : 0) : 
+                                     ((opcode_i == STORE_opcode) ? 1 : dirty_bit_reg);
     // Valid bit
     tag_temp[tag_width] = sel ? 1 : valid_bit_reg;
     // Tag value
-    tag_temp[tag_width - 1 : 0] = address_reg[total_width - 1 -: tag_width];
+    tag_temp[tag_width - 1 : 0] = address_i[total_width - 1 -: tag_width];
     
     store_data_comb = backup_data_reg;
     store_tag_comb = backup_tag_reg;
@@ -289,10 +276,6 @@ always_comb begin
     // Processor
     rdy_o = 0;
     done_o = 0;
-    opcode_next = opcode_reg;
-    func3_next = func3_reg;
-    address_next = address_reg;
-    store_data_next = store_data_reg;
     load_data_next = load_data_reg;
     // AXI
     axi_start_o = 0;
@@ -303,7 +286,6 @@ always_comb begin
     we_data = 0;
     // Hit Logic/Read data from memory logic
     data_comb_next = data_comb_reg;
-    hit_next = hit_reg;
     valid_bit_next = valid_bit_reg;
     dirty_bit_next = dirty_bit_reg;
     backup_data_next = backup_data_reg;
@@ -319,40 +301,28 @@ always_comb begin
         IDLE: begin
             next_state = IDLE;
             rdy_o = 1;
-            opcode_next = opcode_i;
-            func3_next = func3_i;
-            address_next = address_i;
-            store_data_next = data_i;
             if(start_i) begin
-                next_state = READ1;
+                next_state = READ;
             end
         end
-        READ1: begin
-            // The right address is on the address port of both memories
-            next_state = READ2;
-        end
-        READ2: begin
+        READ: begin
             // hit, data, dirty and valid bits are ready
-            next_state = READ3;
             data_comb_next = data;
-            hit_next = hit;
             valid_bit_next = valid_bit;
             dirty_bit_next = dirty_bit;
             encoder_next = encoder;
             // These two are needed in case of a miss
             backup_data_next = rdata_data;
             backup_tag_next = rdata_tag;
-        end
-        READ3: begin
-            // next_state depends on the hit_reg 
-            // LRU unit has valid address
-            if(hit_reg) begin
+            
+            if(hit) begin
                 next_state = HIT;
             end
             else begin
                 next_state = MISS1;
                 axi_start_o = 1; 
             end
+            
         end
         HIT: begin
             next_state = LRU_UPDATE;
@@ -364,8 +334,8 @@ always_comb begin
             // Mogu registri na ove signale, pa nemamo ovo stanje
             next_state = IDLE;
             done_o = 1;
-            we_tag = (opcode_reg == STORE_opcode) ? 1 : 0;
-            we_data = (opcode_reg == STORE_opcode) ? 1 : 0;
+            we_tag = (opcode_i == STORE_opcode) ? 1 : 0;
+            we_data = (opcode_i == STORE_opcode) ? 1 : 0;
             we_lru = 1;
         end
         MISS1: begin
@@ -378,7 +348,7 @@ always_comb begin
             end;
             
             sel = 1;
-            load_miss = (opcode_reg == LOAD_opcode) ? 1 : 0;
+            load_miss = (opcode_i == LOAD_opcode) ? 1 : 0;
             load_data_next = load_data_comb;
             wdata_data_next = store_data_comb;
             wdata_tag_next = store_tag_comb;
