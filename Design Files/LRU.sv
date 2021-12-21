@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-module LRU_Unit
+module LRU
     #(
         parameter num_of_sets_sqrt = 2, // square root of the number of sets
         parameter index_width = 12
@@ -12,9 +12,23 @@ module LRU_Unit
         input logic [num_of_sets_sqrt - 1 : 0] set_num_i,
         output logic [num_of_sets_sqrt - 1 : 0] lru_set_o
     );
+    
+typedef logic [num_of_sets_sqrt ** 4 - 1 : 0] array_type [index_width ** 2 - 1 : 0];
+
+// Fuction for initializing memory
+function array_type initialize_memory();
+    logic [num_of_sets_sqrt ** 4 - 1 : 0] mem [index_width ** 2 - 1 : 0];
+    
+    for(int i = 0; i < index_width ** 2; i++) begin
+       mem[i] = 0; 
+    end
+    
+    return mem;
+
+endfunction
 
 // memory
-logic [num_of_sets_sqrt ** 4 - 1 : 0] memory [index_width ** 2 - 1 : 0]; 
+logic [num_of_sets_sqrt ** 4 - 1 : 0] memory [index_width ** 2 - 1 : 0] = initialize_memory(); 
 logic [num_of_sets_sqrt ** 4 - 1 : 0] value_reg, value_next;
 // Comparators
 logic comp [num_of_sets_sqrt ** 2 - 1 : 0];

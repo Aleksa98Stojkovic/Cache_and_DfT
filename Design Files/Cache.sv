@@ -5,9 +5,9 @@ module Cache
         // Opcodes and subinstructions
         parameter LOAD_opcode = 11,
         parameter STORE_opcode = 12,
-        parameter STORE_WORD = logic'(3'b010),
-        parameter STORE_HALF_WORD = logic'(3'b011),
-        parameter STORE_BYTE = logic'(3'b100), 
+        parameter STORE_WORD = 3'b010,
+        parameter STORE_HALF_WORD = 3'b011,
+        parameter STORE_BYTE = 3'b100, 
     
         parameter opcode_width = 5,
         parameter func3_width = 3,
@@ -28,7 +28,6 @@ module Cache
         input [total_width - 1 : 0] address_i,
         input [total_width - 1 : 0] data_i, // samo za store
         output logic rdy_o, // Izbaciti done_o, pa onda procesor gleda rdy ciklus nakon postavljanja starta
-        output logic done_o, // Ciklus kasnije moze da se uzme podatak
         output logic [total_width - 1 : 0] data_o, // samo za load
         
         // AXI-Cache Interface
@@ -38,25 +37,49 @@ module Cache
         output logic axi_start_o
     );
 
+
+// Function for Initializing Data Memory
+typedef logic [N * total_width - 1 : 0] mem_data_type [2 ** index_width - 1 : 0];
+typedef logic [N * (tag_width + 2) - 1 : 0] mem_tag_type [2 ** index_width - 1 : 0];
+
+function mem_data_type init_mem_data();
+
+    logic [N * total_width - 1 : 0] mem [2 ** index_width];
+
+    for(int i = 0; i < 2 ** index_width; i++)
+        mem[i] = 0;
+    return mem;    
+
+endfunction
+
+function mem_tag_type init_mem_tag();
+
+    logic [N * (tag_width + 2) - 1 : 0] mem [2 ** index_width];
+
+    for(int i = 0; i < 2 ** index_width; i++)
+        mem[i] = 0;
+    return mem;    
+
+endfunction
+
 // FSM
 typedef enum logic[3 : 0] {IDLE, READ, HIT, LRU_UPDATE, MISS1, MISS2, MISS3} fsm_state;
 fsm_state next_state, current_state;
-
 
 // Registers for inputs from the processor
 logic [total_width - 1 : 0] axi_data_reg, axi_data_next;
 
 // Memories for tags and data
-logic [N * (tag_width + 2) - 1 : 0] memory_tag [2 ** index_width];
-logic [N * total_width - 1 : 0] memory_data [2 ** index_width];
+logic [N * (tag_width + 2) - 1 : 0] memory_tag [2 ** index_width] = init_mem_tag();
+logic [N * total_width - 1 : 0] memory_data [2 ** index_width] = init_mem_data();
 logic [index_width - 1 : 0] addr_tag, addr_data;
 logic we_tag, we_data;
 logic [N * (tag_width + 2) - 1 : 0] rdata_tag, wdata_tag;
 logic [N * total_width - 1 : 0] rdata_data, wdata_data;
 
 // Additional Registers
-logic [total_width - 1 : 0] wdata_data_reg, wdata_data_next;
-logic [tag_width + 1 : 0] wdata_tag_reg, wdata_tag_next;
+logic [N * total_width - 1 : 0] wdata_data_reg, wdata_data_next;
+logic [N * (tag_width + 2) - 1 : 0] wdata_tag_reg, wdata_tag_next;
 logic [total_width - 1 : 0] data_comb_reg, data_comb_next;
 logic valid_bit_reg, valid_bit_next, dirty_bit_reg, dirty_bit_next;
 logic [total_width - 1 : 0] load_data_reg, load_data_next;
@@ -83,6 +106,9 @@ logic [N * (tag_width + 2) - 1 : 0] store_tag_comb;
 logic [total_width - 1 : 0] load_data_comb;
 logic sel;
 logic load_miss;
+logic [total_width - 1 : 0] store_temp, write_data;
+logic [tag_width + 1 : 0] tag_temp;
+logic [$clog2(N) - 1 : 0] store_encoder;
 
 // LRU unit signals
 logic we_lru;
@@ -98,12 +124,12 @@ assign axi_data_next = axi_data_i;
 
 // ------------------------------------------------------- //
 // LRU Unit
-LRU_Unit 
+LRU 
 #(
     .num_of_sets_sqrt($clog2(N)),
     .index_width(index_width)
 )
-LRU
+LRU_inst
 (
     .clk_i(clk_i),
     .write_en_i(we_lru),
@@ -214,9 +240,6 @@ assign valid_bit = valid_bit_vector[encoder];
 // Outputs: store_data_comb, store_tag_comb, load_data_comb
 // This is the most critical part
 always_comb begin
-    logic [total_width - 1 : 0] store_temp, write_data;
-    logic [tag_width + 1 : 0] tag_temp;
-    logic [$clog2(N) - 1 : 0] store_encoder;
     
     // sel = 1 -> miss
     
@@ -275,7 +298,6 @@ always_comb begin
 
     // Processor
     rdy_o = 0;
-    done_o = 0;
     load_data_next = load_data_reg;
     // AXI
     axi_start_o = 0;
@@ -333,7 +355,6 @@ always_comb begin
         LRU_UPDATE: begin
             // Mogu registri na ove signale, pa nemamo ovo stanje
             next_state = IDLE;
-            done_o = 1;
             we_tag = (opcode_i == STORE_opcode) ? 1 : 0;
             we_data = (opcode_i == STORE_opcode) ? 1 : 0;
             we_lru = 1;
@@ -363,7 +384,6 @@ always_comb begin
             // In this cycle LRU_Unit has to be updated
             next_state = IDLE;
             we_lru = 1;
-            done_o = 1;
         end
         default:
             next_state = IDLE;
